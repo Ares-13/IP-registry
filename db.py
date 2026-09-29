@@ -256,7 +256,7 @@ def update_workstation(
 
             old = _row_to_ws(current)
             now = datetime.now(old["updated_at"].tzinfo) if old["updated_at"] else datetime.now()
-            _insert_history(cur, old, "UPDATE", updated_by, now)
+            #_insert_history(cur, old, "UPDATE", updated_by, now)
 
             cur.execute(
                 """
@@ -300,7 +300,7 @@ def archive_workstation(ws_id: int, changed_by: str) -> None:
 
             old = _row_to_ws(current)
             now = datetime.now(old["updated_at"].tzinfo) if old["updated_at"] else datetime.now()
-            _insert_history(cur, old, "DELETE", changed_by, now)
+            #_insert_history(cur, old, "DELETE", changed_by, now)
             cur.execute("DELETE FROM workstations WHERE id = %s", (ws_id,))
 
 
