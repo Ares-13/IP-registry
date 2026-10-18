@@ -66,6 +66,7 @@ def fetch_workstations(
     search: str = "",
     full_name: str = "",
     room_number: str = "",
+    ip_address: str = "",
 ) -> list[dict]:
     query = """
         SELECT id, ip_address, full_name, room_number, ticket_id,
@@ -86,11 +87,16 @@ def fetch_workstations(
             %(room_number)s = ''
             OR room_number ILIKE %(room_like)s
         )
+        AND (
+            %(ip_address)s = ''
+            OR ip_address::text ILIKE %(ip_like)s
+        )
         ORDER BY room_number, ip_address
     """
     search = search.strip()
     full_name = full_name.strip()
     room_number = room_number.strip()
+    ip_address = ip_address.strip()
     params = {
         "search": search,
         "like": f"%{search}%",
@@ -98,6 +104,8 @@ def fetch_workstations(
         "name_like": f"%{full_name}%",
         "room_number": room_number,
         "room_like": f"%{room_number}%",
+        "ip_address": ip_address,
+        "ip_like": f"%{ip_address}%",
     }
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -109,6 +117,7 @@ def fetch_history(
     search: str = "",
     full_name: str = "",
     room_number: str = "",
+    ip_address: str = "",
 ) -> list[dict]:
     query = """
         SELECT history_id, id_original, ip_address, full_name, room_number,
@@ -130,11 +139,16 @@ def fetch_history(
             %(room_number)s = ''
             OR room_number ILIKE %(room_like)s
         )
+        AND (
+            %(ip_address)s = ''
+            OR ip_address::text ILIKE %(ip_like)s
+        )
         ORDER BY valid_to DESC, history_id DESC
     """
     search = search.strip()
     full_name = full_name.strip()
     room_number = room_number.strip()
+    ip_address = ip_address.strip()
     params = {
         "search": search,
         "like": f"%{search}%",
@@ -142,6 +156,8 @@ def fetch_history(
         "name_like": f"%{full_name}%",
         "room_number": room_number,
         "room_like": f"%{room_number}%",
+        "ip_address": ip_address,
+        "ip_like": f"%{ip_address}%",
     }
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -207,27 +223,27 @@ def add_workstation(
             return cur.fetchone()[0]
 
 
-def _insert_history(cur, row: dict, operation: str, changed_by: str, valid_to: datetime) -> None:
-    cur.execute(
-        """
-        INSERT INTO workstations_history (
-            id_original, ip_address, full_name, room_number, ticket_id,
-            valid_from, valid_to, operation, changed_by
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            row["id"],
-            row["ip_address"],
-            row["full_name"],
-            row["room_number"],
-            row["ticket_id"] or None,
-            row["updated_at"],
-            valid_to,
-            operation,
-            changed_by,
-        ),
-    )
+# def _insert_history(cur, row: dict, operation: str, changed_by: str, valid_to: datetime) -> None:
+#     cur.execute(
+#         """
+#         INSERT INTO workstations_history (
+#             id_original, ip_address, full_name, room_number, ticket_id,
+#             valid_from, valid_to, operation, changed_by
+#         )
+#         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+#         """,
+#         (
+#             row["id"],
+#             row["ip_address"],
+#             row["full_name"],
+#             row["room_number"],
+#             row["ticket_id"] or None,
+#             row["updated_at"],
+#             valid_to,
+#             operation,
+#             changed_by,
+#         ),
+#     )
 
 
 def update_workstation(

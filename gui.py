@@ -13,6 +13,8 @@ import psycopg2.errors
 import db
 from config import get_default_operator, load_env
 
+from PIL import Image, ImageTk
+
 APP_TITLE = "IP-реестр"
 OPERATION_LABELS = {
     "INSERT": "Добавление",
@@ -44,9 +46,16 @@ class App(tk.Tk):
         self.geometry("1280x720")
         self.minsize(960, 560)
 
+        try:
+            # Подключаем файл .ico напрямую
+            self.iconbitmap("logo.ico")
+        except Exception as e:
+            print(f"Ошибка загрузки иконки: {e}")
+
         self.operator_var = tk.StringVar(value=get_default_operator())
         self.name_var = tk.StringVar()
         self.room_var = tk.StringVar()
+        self.ip_adr = tk.StringVar()
 
         self._ws_by_iid: dict[str, dict] = {}
         self._hist_by_iid: dict[str, dict] = {}
@@ -58,19 +67,47 @@ class App(tk.Tk):
         self.refresh_all()
 
     def _build(self) -> None:
+        bg_color = "#e8f5e9"
+        self.configure(bg=bg_color)
+        
+        style = ttk.Style()
+        style.configure("TFrame", background=bg_color)
+        style.configure("TLabel", background=bg_color)
+        style.configure("TLabelframe", background=bg_color)
+        style.configure("TLabelframe.Label", background=bg_color)
+
         outer = ttk.Frame(self, padding=10)
         outer.pack(fill=tk.BOTH, expand=True)
 
-        title = ttk.Label(outer, text=APP_TITLE, font=("Segoe UI", 16, "bold"))
+        # Создаем контейнер для шапки (заголовок слева, логотип справа)
+        header_frame = ttk.Frame(outer)
+        header_frame.pack(fill=tk.X, pady=(0, 8))
+
+        # Блок для текста
+        text_frame = ttk.Frame(header_frame)
+        text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        title = ttk.Label(text_frame, text=APP_TITLE, font=("Segoe UI", 16, "bold"))
         title.pack(anchor=tk.W)
 
         hint = ttk.Label(
-            outer,
-            text="Актуальные адреса рабочих станций и архив изменений. "
-            "Поиск — по фамилии и аудитории.",
+            text_frame,
+            text="Актуальные адреса рабочих станций и архив изменений. Поиск — по фамилии и аудитории.",
         )
         hint.pack(anchor=tk.W, pady=(0, 8))
 
+        try:
+            img = Image.open("logo_pgups.png")
+            # thumbnail сохраняет оригинальные пропорции, вписывая в заданные рамки
+            img.thumbnail((150, 80), Image.Resampling.LANCZOS) 
+            self.logo_image = ImageTk.PhotoImage(img)
+            
+            logo_label = ttk.Label(header_frame, image=self.logo_image)
+            logo_label.pack(side=tk.RIGHT, anchor=tk.NE, padx=(0, 10))
+        except Exception as e:
+            print(f"Ошибка загрузки логотипа: {e}")
+
+        # Панель инструментов
         toolbar = ttk.Frame(outer)
         toolbar.pack(fill=tk.X, pady=(0, 8))
 
@@ -81,6 +118,11 @@ class App(tk.Tk):
 
         ttk.Label(toolbar, text="Аудитория:").pack(side=tk.LEFT)
         room_entry = ttk.Entry(toolbar, textvariable=self.room_var, width=14)
+        room_entry.pack(side=tk.LEFT, padx=(4, 12))
+        room_entry.bind("<Return>", lambda _e: self.refresh_all())
+
+        ttk.Label(toolbar, text="IP-адресс:").pack(side=tk.LEFT)
+        room_entry = ttk.Entry(toolbar, textvariable=self.ip_adr, width=14)
         room_entry.pack(side=tk.LEFT, padx=(4, 12))
         room_entry.bind("<Return>", lambda _e: self.refresh_all())
 
@@ -99,6 +141,7 @@ class App(tk.Tk):
         ttk.Label(op_box, text="Оператор:").pack(side=tk.LEFT)
         ttk.Entry(op_box, textvariable=self.operator_var, width=18).pack(side=tk.LEFT, padx=4)
 
+        # Вкладки
         self.notebook = ttk.Notebook(outer)
         self.notebook.pack(fill=tk.BOTH, expand=True)
         self.notebook.bind("<<NotebookTabChanged>>", lambda _e: self._sync_status())
@@ -111,6 +154,7 @@ class App(tk.Tk):
         self._build_live_tab()
         self._build_archive_tab()
 
+        # Статус-бар
         self.status = tk.StringVar(value="")
         ttk.Label(outer, textvariable=self.status).pack(anchor=tk.W, pady=(6, 0))
 
@@ -264,14 +308,16 @@ class App(tk.Tk):
     def _reset_search(self) -> None:
         self.name_var.set("")
         self.room_var.set("")
+        self.ip_adr.set("")
         self.refresh_all()
 
     def refresh_all(self) -> None:
         name = self.name_var.get()
         room = self.room_var.get()
+        ip_adr = self.ip_adr.get()  
         try:
-            workstations = db.fetch_workstations(full_name=name, room_number=room)
-            history = db.fetch_history(full_name=name, room_number=room)
+            workstations = db.fetch_workstations(full_name=name, room_number=room, ip_address=ip_adr)
+            history = db.fetch_history(full_name=name, room_number=room, ip_address=ip_adr)
         except Exception as exc:
             messagebox.showerror(APP_TITLE, explain_db_error(exc), parent=self)
             return
@@ -592,4 +638,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Делаем интерфейс четким на экранах с масштабированием >100%
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
     main()
