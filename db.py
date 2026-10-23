@@ -41,6 +41,7 @@ def _row_to_ws(row: dict) -> dict:
         "full_name": row["full_name"],
         "room_number": row["room_number"],
         "ticket_id": row["ticket_id"] or "",
+        "note": row.get("note") or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by"] or "",
@@ -55,10 +56,12 @@ def _row_to_history(row: dict) -> dict:
         "full_name": row["full_name"],
         "room_number": row["room_number"],
         "ticket_id": row["ticket_id"] or "",
+        "note": row.get("note") or "",
         "valid_from": row["valid_from"],
         "valid_to": row["valid_to"],
         "operation": row["operation"],
         "changed_by": row["changed_by"] or "",
+        "change_details": row.get("change_details") or "",
     }
 
 
@@ -69,7 +72,7 @@ def fetch_workstations(
     ip_address: str = "",
 ) -> list[dict]:
     query = """
-        SELECT id, ip_address, full_name, room_number, ticket_id,
+        SELECT id, ip_address, full_name, room_number, ticket_id, note,
                created_at, updated_at, updated_by
         FROM workstations
         WHERE (
@@ -78,6 +81,7 @@ def fetch_workstations(
             OR full_name ILIKE %(like)s
             OR room_number ILIKE %(like)s
             OR COALESCE(ticket_id, '') ILIKE %(like)s
+            OR COALESCE(note, '') ILIKE %(like)s
         )
         AND (
             %(full_name)s = ''
@@ -121,7 +125,7 @@ def fetch_history(
 ) -> list[dict]:
     query = """
         SELECT history_id, id_original, ip_address, full_name, room_number,
-               ticket_id, valid_from, valid_to, operation, changed_by
+               ticket_id, note, valid_from, valid_to, operation, changed_by, change_details
         FROM workstations_history
         WHERE (
             %(search)s = ''
@@ -129,6 +133,8 @@ def fetch_history(
             OR full_name ILIKE %(like)s
             OR room_number ILIKE %(like)s
             OR COALESCE(ticket_id, '') ILIKE %(like)s
+            OR COALESCE(note, '') ILIKE %(like)s
+            OR COALESCE(change_details, '') ILIKE %(like)s
             OR operation ILIKE %(like)s
         )
         AND (
@@ -190,7 +196,7 @@ def get_workstation(ws_id: int) -> Optional[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, ip_address, full_name, room_number, ticket_id,
+                SELECT id, ip_address, full_name, room_number, ticket_id, note,
                        created_at, updated_at, updated_by
                 FROM workstations
                 WHERE id = %s
@@ -206,6 +212,7 @@ def add_workstation(
     full_name: str,
     room_number: str,
     ticket_id: Optional[str],
+    note: Optional[str],
     updated_by: str,
 ) -> int:
     with get_connection() as conn:
@@ -213,37 +220,14 @@ def add_workstation(
             cur.execute(
                 """
                 INSERT INTO workstations (
-                    ip_address, full_name, room_number, ticket_id, updated_by
+                    ip_address, full_name, room_number, ticket_id, note, updated_by
                 )
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                (ip_address, full_name, room_number, ticket_id or None, updated_by),
+                (ip_address, full_name, room_number, ticket_id or None, note or "", updated_by),
             )
             return cur.fetchone()[0]
-
-
-# def _insert_history(cur, row: dict, operation: str, changed_by: str, valid_to: datetime) -> None:
-#     cur.execute(
-#         """
-#         INSERT INTO workstations_history (
-#             id_original, ip_address, full_name, room_number, ticket_id,
-#             valid_from, valid_to, operation, changed_by
-#         )
-#         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-#         """,
-#         (
-#             row["id"],
-#             row["ip_address"],
-#             row["full_name"],
-#             row["room_number"],
-#             row["ticket_id"] or None,
-#             row["updated_at"],
-#             valid_to,
-#             operation,
-#             changed_by,
-#         ),
-#     )
 
 
 def update_workstation(
@@ -252,13 +236,14 @@ def update_workstation(
     full_name: str,
     room_number: str,
     ticket_id: Optional[str],
+    note: Optional[str],
     updated_by: str,
 ) -> None:
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, ip_address, full_name, room_number, ticket_id,
+                SELECT id, ip_address, full_name, room_number, ticket_id, note,
                        created_at, updated_at, updated_by
                 FROM workstations
                 WHERE id = %s
@@ -268,11 +253,10 @@ def update_workstation(
             )
             current = cur.fetchone()
             if not current:
-                raise ValueError("Запись не найдена — возможно, её уже отправили в архив.")
+                raise ValueError("Запись не найдена — возможно, её уже удалили.")
 
             old = _row_to_ws(current)
             now = datetime.now(old["updated_at"].tzinfo) if old["updated_at"] else datetime.now()
-            #_insert_history(cur, old, "UPDATE", updated_by, now)
 
             cur.execute(
                 """
@@ -281,6 +265,7 @@ def update_workstation(
                     full_name = %s,
                     room_number = %s,
                     ticket_id = %s,
+                    note = %s,
                     updated_at = %s,
                     updated_by = %s
                 WHERE id = %s
@@ -290,6 +275,7 @@ def update_workstation(
                     full_name,
                     room_number,
                     ticket_id or None,
+                    note or "",
                     now,
                     updated_by,
                     ws_id,
@@ -302,21 +288,19 @@ def archive_workstation(ws_id: int, changed_by: str) -> None:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, ip_address, full_name, room_number, ticket_id,
-                       created_at, updated_at, updated_by
-                FROM workstations
-                WHERE id = %s
-                FOR UPDATE
+                SELECT id FROM workstations WHERE id = %s FOR UPDATE
                 """,
                 (ws_id,),
             )
-            current = cur.fetchone()
-            if not current:
+            if not cur.fetchone():
                 raise ValueError("Запись не найдена.")
 
-            old = _row_to_ws(current)
-            now = datetime.now(old["updated_at"].tzinfo) if old["updated_at"] else datetime.now()
-            #_insert_history(cur, old, "DELETE", changed_by, now)
+            # Обновляем updated_by перед удалением (триггер UPDATE не сработает, т.к. данные не менялись),
+            # зато триггер DELETE запишет актуального оператора, который удалил запись.
+            cur.execute(
+                "UPDATE workstations SET updated_by = %s WHERE id = %s",
+                (changed_by, ws_id),
+            )
             cur.execute("DELETE FROM workstations WHERE id = %s", (ws_id,))
 
 
@@ -326,7 +310,7 @@ def restore_from_history(history_id: int, updated_by: str) -> int:
             cur.execute(
                 """
                 SELECT history_id, id_original, ip_address, full_name, room_number,
-                       ticket_id, valid_from, valid_to, operation, changed_by
+                       ticket_id, note, valid_from, valid_to, operation, changed_by, change_details
                 FROM workstations_history
                 WHERE history_id = %s
                 """,
@@ -334,15 +318,15 @@ def restore_from_history(history_id: int, updated_by: str) -> int:
             )
             row = cur.fetchone()
             if not row:
-                raise ValueError("Запись архива не найдена.")
+                raise ValueError("Запись в журнале событий не найдена.")
 
             hist = _row_to_history(row)
             cur.execute(
                 """
                 INSERT INTO workstations (
-                    ip_address, full_name, room_number, ticket_id, updated_by
+                    ip_address, full_name, room_number, ticket_id, note, updated_by
                 )
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -350,6 +334,7 @@ def restore_from_history(history_id: int, updated_by: str) -> int:
                     hist["full_name"],
                     hist["room_number"],
                     hist["ticket_id"] or None,
+                    hist["note"] or "",
                     updated_by,
                 ),
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import sys
 import tkinter as tk
 from datetime import datetime
@@ -9,11 +10,10 @@ from tkinter import filedialog, messagebox, ttk
 
 import psycopg2
 import psycopg2.errors
+from PIL import Image, ImageTk
 
 import db
 from config import get_default_operator, load_env
-
-from PIL import Image, ImageTk
 
 APP_TITLE = "IP-реестр"
 OPERATION_LABELS = {
@@ -43,11 +43,10 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1280x720")
-        self.minsize(960, 560)
+        self.geometry("1360x740")
+        self.minsize(1024, 580)
 
         try:
-            # Подключаем файл .ico напрямую
             self.iconbitmap("logo.ico")
         except Exception as e:
             print(f"Ошибка загрузки иконки: {e}")
@@ -63,13 +62,17 @@ class App(tk.Tk):
         self._selected_hist: dict | None = None
         self._editing = False
 
+        # Для хранения заголовков и состояния сортировки
+        self._tree_headings: dict[ttk.Treeview, dict[str, str]] = {}
+        self._sort_state: dict[tuple[ttk.Treeview, str], bool] = {}
+
         self._build()
         self.refresh_all()
 
     def _build(self) -> None:
         bg_color = "#e8f5e9"
         self.configure(bg=bg_color)
-        
+
         style = ttk.Style()
         style.configure("TFrame", background=bg_color)
         style.configure("TLabel", background=bg_color)
@@ -79,11 +82,10 @@ class App(tk.Tk):
         outer = ttk.Frame(self, padding=10)
         outer.pack(fill=tk.BOTH, expand=True)
 
-        # Создаем контейнер для шапки (заголовок слева, логотип справа)
+        # Шапка (заголовок слева, логотип справа)
         header_frame = ttk.Frame(outer)
         header_frame.pack(fill=tk.X, pady=(0, 8))
 
-        # Блок для текста
         text_frame = ttk.Frame(header_frame)
         text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -92,16 +94,15 @@ class App(tk.Tk):
 
         hint = ttk.Label(
             text_frame,
-            text="Актуальные адреса рабочих станций и архив изменений. Поиск — по фамилии и аудитории.",
+            text="Актуальные адреса рабочих станций и журнал событий. Клик по заголовку столбца — сортировка.",
         )
         hint.pack(anchor=tk.W, pady=(0, 8))
 
         try:
             img = Image.open("logo_pgups.png")
-            # thumbnail сохраняет оригинальные пропорции, вписывая в заданные рамки
-            img.thumbnail((150, 80), Image.Resampling.LANCZOS) 
+            img.thumbnail((150, 80), Image.Resampling.LANCZOS)
             self.logo_image = ImageTk.PhotoImage(img)
-            
+
             logo_label = ttk.Label(header_frame, image=self.logo_image)
             logo_label.pack(side=tk.RIGHT, anchor=tk.NE, padx=(0, 10))
         except Exception as e:
@@ -112,19 +113,19 @@ class App(tk.Tk):
         toolbar.pack(fill=tk.X, pady=(0, 8))
 
         ttk.Label(toolbar, text="Фамилия / ФИО:").pack(side=tk.LEFT)
-        name_entry = ttk.Entry(toolbar, textvariable=self.name_var, width=28)
+        name_entry = ttk.Entry(toolbar, textvariable=self.name_var, width=26)
         name_entry.pack(side=tk.LEFT, padx=(4, 12))
         name_entry.bind("<Return>", lambda _e: self.refresh_all())
 
         ttk.Label(toolbar, text="Аудитория:").pack(side=tk.LEFT)
-        room_entry = ttk.Entry(toolbar, textvariable=self.room_var, width=14)
+        room_entry = ttk.Entry(toolbar, textvariable=self.room_var, width=12)
         room_entry.pack(side=tk.LEFT, padx=(4, 12))
         room_entry.bind("<Return>", lambda _e: self.refresh_all())
 
-        ttk.Label(toolbar, text="IP-адресс:").pack(side=tk.LEFT)
-        room_entry = ttk.Entry(toolbar, textvariable=self.ip_adr, width=14)
-        room_entry.pack(side=tk.LEFT, padx=(4, 12))
-        room_entry.bind("<Return>", lambda _e: self.refresh_all())
+        ttk.Label(toolbar, text="IP-адрес:").pack(side=tk.LEFT)
+        ip_entry = ttk.Entry(toolbar, textvariable=self.ip_adr, width=14)
+        ip_entry.pack(side=tk.LEFT, padx=(4, 12))
+        ip_entry.bind("<Return>", lambda _e: self.refresh_all())
 
         ttk.Button(toolbar, text="Найти", command=self.refresh_all).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Сбросить", command=self._reset_search).pack(side=tk.LEFT, padx=2)
@@ -149,7 +150,7 @@ class App(tk.Tk):
         self.live_tab = ttk.Frame(self.notebook, padding=6)
         self.archive_tab = ttk.Frame(self.notebook, padding=6)
         self.notebook.add(self.live_tab, text="Актуальные")
-        self.notebook.add(self.archive_tab, text="Архив")
+        self.notebook.add(self.archive_tab, text="Журнал событий")
 
         self._build_live_tab()
         self._build_archive_tab()
@@ -157,6 +158,49 @@ class App(tk.Tk):
         # Статус-бар
         self.status = tk.StringVar(value="")
         ttk.Label(outer, textvariable=self.status).pack(anchor=tk.W, pady=(6, 0))
+
+    def _sort_tree(self, tree: ttk.Treeview, col: str) -> None:
+        """Сортирует таблицу Treeview по выбранному столбцу (как в Excel)."""
+        reverse = self._sort_state.get((tree, col), False)
+        items = [(tree.set(iid, col), iid) for iid in tree.get_children("")]
+
+        def sort_key(item: tuple[str, str]):
+            val = item[0].strip()
+            if not val:
+                return (1, "")  # Пустые ячейки всегда в конце
+            if col == "ip":
+                try:
+                    return (0, int(ipaddress.ip_address(val)))
+                except ValueError:
+                    return (0, val.lower())
+            if col in ("updated_at", "valid_to"):
+                try:
+                    return (0, datetime.strptime(val, "%d.%m.%Y %H:%M"))
+                except ValueError:
+                    return (0, val.lower())
+            return (0, val.lower())
+
+        items.sort(key=sort_key, reverse=reverse)
+
+        for index, (_, iid) in enumerate(items):
+            tree.move(iid, "", index)
+
+        # Обновляем стрелочки в заголовках
+        headings = self._tree_headings[tree]
+        for c, text in headings.items():
+            if c == col:
+                arrow = " ▼" if reverse else " ▲"
+                tree.heading(c, text=text + arrow)
+            else:
+                tree.heading(c, text=text)
+
+        self._sort_state[(tree, col)] = not reverse
+
+    def _reset_tree_Sort_headers(self, tree: ttk.Treeview) -> None:
+        """Сбрасывает значки стрелочек при полном обновлении данных из БД."""
+        if tree in self._tree_headings:
+            for c, text in self._tree_headings[tree].items():
+                tree.heading(c, text=text)
 
     def _build_live_tab(self) -> None:
         pane = ttk.Panedwindow(self.live_tab, orient=tk.HORIZONTAL)
@@ -167,20 +211,33 @@ class App(tk.Tk):
         pane.add(left, weight=4)
         pane.add(right, weight=2)
 
-        columns = ("ip", "full_name", "room", "ticket", "updated_at", "updated_by")
+        columns = ("ip", "full_name", "room", "ticket", "note", "updated_at", "updated_by")
         self.ws_tree = ttk.Treeview(left, columns=columns, show="headings", selectmode="browse")
         headings = {
             "ip": "IP-адрес",
             "full_name": "ФИО",
             "room": "Аудитория",
             "ticket": "Заявка",
+            "note": "Примечание",
             "updated_at": "Обновлено",
             "updated_by": "Кем",
         }
-        widths = {"ip": 130, "full_name": 240, "room": 90, "ticket": 110, "updated_at": 130, "updated_by": 90}
+        self._tree_headings[self.ws_tree] = headings.copy()
+        widths = {
+            "ip": 120,
+            "full_name": 200,
+            "room": 85,
+            "ticket": 95,
+            "note": 160,
+            "updated_at": 120,
+            "updated_by": 85,
+        }
         for col in columns:
-            self.ws_tree.heading(col, text=headings[col])
+            self.ws_tree.heading(
+                col, text=headings[col], command=lambda c=col: self._sort_tree(self.ws_tree, c)
+            )
             self.ws_tree.column(col, width=widths[col], stretch=True)
+
         yscroll = ttk.Scrollbar(left, orient=tk.VERTICAL, command=self.ws_tree.yview)
         self.ws_tree.configure(yscrollcommand=yscroll.set)
         self.ws_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -196,6 +253,7 @@ class App(tk.Tk):
             "full_name": tk.StringVar(),
             "room_number": tk.StringVar(),
             "ticket_id": tk.StringVar(),
+            "note": tk.StringVar(),
             "created_at": tk.StringVar(),
             "updated_at": tk.StringVar(),
             "updated_by": tk.StringVar(),
@@ -205,6 +263,7 @@ class App(tk.Tk):
             ("full_name", "ФИО"),
             ("room_number", "Аудитория"),
             ("ticket_id", "Номер заявки"),
+            ("note", "Примечание"),
             ("created_at", "Создано"),
             ("updated_at", "Обновлено"),
             ("updated_by", "Кем изменено"),
@@ -222,7 +281,7 @@ class App(tk.Tk):
         self.btn_edit = ttk.Button(buttons, text="Изменить", command=self._start_edit, width=16)
         self.btn_save = ttk.Button(buttons, text="Сохранить", command=self._save_edit, width=16)
         self.btn_cancel = ttk.Button(buttons, text="Отмена", command=self._cancel_edit, width=16)
-        self.btn_delete = ttk.Button(buttons, text="Удалить в архив", command=self._delete_ws, width=16)
+        self.btn_delete = ttk.Button(buttons, text="Удалить запись", command=self._delete_ws, width=16)
         self.btn_edit.pack(pady=(0, 6))
         self.btn_delete.pack(pady=(0, 6))
         self._set_edit_mode(False)
@@ -232,33 +291,51 @@ class App(tk.Tk):
         pane.pack(fill=tk.BOTH, expand=True)
 
         left = ttk.Frame(pane)
-        right = ttk.LabelFrame(pane, text="Запись архива", padding=8)
+        right = ttk.LabelFrame(pane, text="Детали события", padding=8)
         pane.add(left, weight=4)
         pane.add(right, weight=2)
 
-        columns = ("operation", "ip", "full_name", "room", "ticket", "valid_to", "changed_by")
+        columns = (
+            "operation",
+            "change_details",
+            "ip",
+            "full_name",
+            "room",
+            "ticket",
+            "note",
+            "valid_to",
+            "changed_by",
+        )
         self.hist_tree = ttk.Treeview(left, columns=columns, show="headings", selectmode="browse")
         headings = {
             "operation": "Операция",
+            "change_details": "Что изменилось",
             "ip": "IP-адрес",
             "full_name": "ФИО",
             "room": "Аудитория",
             "ticket": "Заявка",
+            "note": "Примечание",
             "valid_to": "Когда",
             "changed_by": "Кем",
         }
+        self._tree_headings[self.hist_tree] = headings.copy()
         widths = {
-            "operation": 110,
-            "ip": 130,
-            "full_name": 220,
-            "room": 90,
-            "ticket": 110,
-            "valid_to": 130,
-            "changed_by": 90,
+            "operation": 95,
+            "change_details": 230,
+            "ip": 115,
+            "full_name": 180,
+            "room": 80,
+            "ticket": 90,
+            "note": 130,
+            "valid_to": 120,
+            "changed_by": 80,
         }
         for col in columns:
-            self.hist_tree.heading(col, text=headings[col])
+            self.hist_tree.heading(
+                col, text=headings[col], command=lambda c=col: self._sort_tree(self.hist_tree, c)
+            )
             self.hist_tree.column(col, width=widths[col], stretch=True)
+
         yscroll = ttk.Scrollbar(left, orient=tk.VERTICAL, command=self.hist_tree.yview)
         self.hist_tree.configure(yscrollcommand=yscroll.set)
         self.hist_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -269,10 +346,12 @@ class App(tk.Tk):
         fields.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.hist_fields = {
             "operation": tk.StringVar(),
+            "change_details": tk.StringVar(),
             "ip_address": tk.StringVar(),
             "full_name": tk.StringVar(),
             "room_number": tk.StringVar(),
             "ticket_id": tk.StringVar(),
+            "note": tk.StringVar(),
             "valid_from": tk.StringVar(),
             "valid_to": tk.StringVar(),
             "changed_by": tk.StringVar(),
@@ -280,14 +359,16 @@ class App(tk.Tk):
         }
         labels = [
             ("operation", "Операция"),
+            ("change_details", "Что изменилось"),
             ("ip_address", "IP-адрес"),
             ("full_name", "ФИО"),
             ("room_number", "Аудитория"),
             ("ticket_id", "Номер заявки"),
+            ("note", "Примечание"),
             ("valid_from", "Действовало с"),
-            ("valid_to", "Действовало до"),
-            ("changed_by", "Кто изменил"),
-            ("id_original", "Исходный id"),
+            ("valid_to", "Дата события"),
+            ("changed_by", "Оператор"),
+            ("id_original", "Исходный ID"),
         ]
         for row, (key, caption) in enumerate(labels):
             ttk.Label(fields, text=caption).grid(row=row, column=0, sticky=tk.W, pady=3, padx=(0, 8))
@@ -314,7 +395,7 @@ class App(tk.Tk):
     def refresh_all(self) -> None:
         name = self.name_var.get()
         room = self.room_var.get()
-        ip_adr = self.ip_adr.get()  
+        ip_adr = self.ip_adr.get()
         try:
             workstations = db.fetch_workstations(full_name=name, room_number=room, ip_address=ip_adr)
             history = db.fetch_history(full_name=name, room_number=room, ip_address=ip_adr)
@@ -327,6 +408,7 @@ class App(tk.Tk):
 
     def _fill_ws(self, rows: list[dict]) -> None:
         self._cancel_edit(silent=True)
+        self._reset_tree_Sort_headers(self.ws_tree)
         self.ws_tree.delete(*self.ws_tree.get_children())
         self._ws_by_iid.clear()
         self._selected_ws = None
@@ -343,12 +425,14 @@ class App(tk.Tk):
                     row["full_name"],
                     row["room_number"],
                     row["ticket_id"],
+                    row["note"],
                     fmt_dt(row["updated_at"]),
                     row["updated_by"],
                 ),
             )
 
     def _fill_hist(self, rows: list[dict]) -> None:
+        self._reset_tree_Sort_headers(self.hist_tree)
         self.hist_tree.delete(*self.hist_tree.get_children())
         self._hist_by_iid.clear()
         self._selected_hist = None
@@ -356,16 +440,27 @@ class App(tk.Tk):
         for row in rows:
             iid = str(row["history_id"])
             self._hist_by_iid[iid] = row
+            
+            # Если в старых записях БД нет деталей, ставим прочерк или базовое описание
+            details = row.get("change_details") or ""
+            if not details:
+                if row["operation"] == "INSERT":
+                    details = "Создание новой записи"
+                elif row["operation"] == "DELETE":
+                    details = "Удаление записи"
+
             self.hist_tree.insert(
                 "",
                 tk.END,
                 iid=iid,
                 values=(
                     OPERATION_LABELS.get(row["operation"], row["operation"]),
+                    details,
                     row["ip_address"],
                     row["full_name"],
                     row["room_number"],
                     row["ticket_id"],
+                    row["note"],
                     fmt_dt(row["valid_to"]),
                     row["changed_by"],
                 ),
@@ -376,9 +471,9 @@ class App(tk.Tk):
         hist = len(self._hist_by_iid)
         tab = self.notebook.index(self.notebook.select()) if str(self.notebook.select()) else 0
         if tab == 0:
-            self.status.set(f"Актуальных записей: {live}. Архив: {hist}.")
+            self.status.set(f"Актуальных записей: {live}. Событий в журнале: {hist}.")
         else:
-            self.status.set(f"Записей в архиве: {hist}. Актуальных: {live}.")
+            self.status.set(f"Событий в журнале: {hist}. Актуальных записей: {live}.")
 
     def _on_ws_select(self, _event=None) -> None:
         if self._editing:
@@ -406,11 +501,21 @@ class App(tk.Tk):
         if not row:
             return
         self._selected_hist = row
+        
+        details = row.get("change_details") or ""
+        if not details:
+            if row["operation"] == "INSERT":
+                details = "Создание новой записи"
+            elif row["operation"] == "DELETE":
+                details = "Удаление записи"
+
         self.hist_fields["operation"].set(OPERATION_LABELS.get(row["operation"], row["operation"]))
+        self.hist_fields["change_details"].set(details)
         self.hist_fields["ip_address"].set(row["ip_address"])
         self.hist_fields["full_name"].set(row["full_name"])
         self.hist_fields["room_number"].set(row["room_number"])
         self.hist_fields["ticket_id"].set(row["ticket_id"])
+        self.hist_fields["note"].set(row["note"])
         self.hist_fields["valid_from"].set(fmt_dt(row["valid_from"]))
         self.hist_fields["valid_to"].set(fmt_dt(row["valid_to"]))
         self.hist_fields["changed_by"].set(row["changed_by"])
@@ -421,6 +526,7 @@ class App(tk.Tk):
         self.ws_fields["full_name"].set(row["full_name"])
         self.ws_fields["room_number"].set(row["room_number"])
         self.ws_fields["ticket_id"].set(row["ticket_id"])
+        self.ws_fields["note"].set(row["note"])
         self.ws_fields["created_at"].set(fmt_dt(row["created_at"]))
         self.ws_fields["updated_at"].set(fmt_dt(row["updated_at"]))
         self.ws_fields["updated_by"].set(row["updated_by"])
@@ -435,7 +541,7 @@ class App(tk.Tk):
 
     def _set_edit_mode(self, enabled: bool) -> None:
         self._editing = enabled
-        for key in ("ip_address", "full_name", "room_number", "ticket_id"):
+        for key in ("ip_address", "full_name", "room_number", "ticket_id", "note"):
             self.ws_entries[key].configure(state="normal" if enabled else "readonly")
         if enabled:
             self.btn_edit.pack_forget()
@@ -467,6 +573,7 @@ class App(tk.Tk):
         full_name = self.ws_fields["full_name"].get().strip()
         room = self.ws_fields["room_number"].get().strip()
         ticket = self.ws_fields["ticket_id"].get().strip()
+        note = self.ws_fields["note"].get().strip()
         if not ip or not full_name or not room:
             messagebox.showwarning(
                 APP_TITLE, "Заполните IP-адрес, ФИО и аудиторию.", parent=self
@@ -479,6 +586,7 @@ class App(tk.Tk):
                 full_name,
                 room,
                 ticket,
+                note,
                 self.operator(),
             )
         except Exception as exc:
@@ -498,8 +606,8 @@ class App(tk.Tk):
         row = self._selected_ws
         if not messagebox.askyesno(
             APP_TITLE,
-            f"Перенести в архив станцию {row['ip_address']} ({row['full_name']}, ауд. {row['room_number']})?\n"
-            "Из актуального списка она исчезнет, запись останется в архиве.",
+            f"Удалить станцию {row['ip_address']} ({row['full_name']}, ауд. {row['room_number']})?\n"
+            "Из актуального списка она исчезнет, событие сохранится в журнале.",
             parent=self,
         ):
             return
@@ -512,7 +620,7 @@ class App(tk.Tk):
 
     def _restore_hist(self) -> None:
         if not self._selected_hist:
-            messagebox.showinfo(APP_TITLE, "Выберите запись архива.", parent=self)
+            messagebox.showinfo(APP_TITLE, "Выберите запись в журнале событий.", parent=self)
             return
         row = self._selected_hist
         if not messagebox.askyesno(
@@ -582,6 +690,7 @@ class WorkstationDialog(tk.Toplevel):
         self.full_name = tk.StringVar()
         self.room = tk.StringVar()
         self.ticket = tk.StringVar()
+        self.note = tk.StringVar()
 
         body = ttk.Frame(self, padding=12)
         body.pack(fill=tk.BOTH, expand=True)
@@ -590,6 +699,7 @@ class WorkstationDialog(tk.Toplevel):
             ("ФИО", self.full_name),
             ("Аудитория", self.room),
             ("Номер заявки", self.ticket),
+            ("Примечание", self.note),
         ]
         for i, (caption, var) in enumerate(rows):
             ttk.Label(body, text=caption).grid(row=i, column=0, sticky=tk.W, pady=4, padx=(0, 8))
@@ -609,13 +719,14 @@ class WorkstationDialog(tk.Toplevel):
         full_name = self.full_name.get().strip()
         room = self.room.get().strip()
         ticket = self.ticket.get().strip()
+        note = self.note.get().strip()
         if not ip or not full_name or not room:
             messagebox.showwarning(
                 APP_TITLE, "Заполните IP-адрес, ФИО и аудиторию.", parent=self
             )
             return
         try:
-            db.add_workstation(ip, full_name, room, ticket, self.operator)
+            db.add_workstation(ip, full_name, room, ticket, note, self.operator)
         except Exception as exc:
             messagebox.showerror(APP_TITLE, explain_db_error(exc), parent=self)
             return
