@@ -122,8 +122,10 @@ def fetch_history(
     full_name: str = "",
     room_number: str = "",
     ip_address: str = "",
+    limit: Optional[int] = 500,
 ) -> list[dict]:
-    query = """
+    limit_clause = "LIMIT %(limit)s" if limit is not None else ""
+    query = f"""
         SELECT history_id, id_original, ip_address, full_name, room_number,
                ticket_id, note, valid_from, valid_to, operation, changed_by, change_details
         FROM workstations_history
@@ -150,6 +152,7 @@ def fetch_history(
             OR ip_address::text ILIKE %(ip_like)s
         )
         ORDER BY valid_to DESC, history_id DESC
+        {limit_clause}
     """
     search = search.strip()
     full_name = full_name.strip()
@@ -164,6 +167,7 @@ def fetch_history(
         "room_like": f"%{room_number}%",
         "ip_address": ip_address,
         "ip_like": f"%{ip_address}%",
+        "limit": limit,
     }
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -295,8 +299,6 @@ def archive_workstation(ws_id: int, changed_by: str) -> None:
             if not cur.fetchone():
                 raise ValueError("Запись не найдена.")
 
-            # Обновляем updated_by перед удалением (триггер UPDATE не сработает, т.к. данные не менялись),
-            # зато триггер DELETE запишет актуального оператора, который удалил запись.
             cur.execute(
                 "UPDATE workstations SET updated_by = %s WHERE id = %s",
                 (changed_by, ws_id),

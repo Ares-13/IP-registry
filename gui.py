@@ -55,6 +55,7 @@ class App(tk.Tk):
         self.name_var = tk.StringVar()
         self.room_var = tk.StringVar()
         self.ip_adr = tk.StringVar()
+        self.limit_var = tk.StringVar(value="500")
 
         self._ws_by_iid: dict[str, dict] = {}
         self._hist_by_iid: dict[str, dict] = {}
@@ -126,6 +127,18 @@ class App(tk.Tk):
         ip_entry = ttk.Entry(toolbar, textvariable=self.ip_adr, width=14)
         ip_entry.pack(side=tk.LEFT, padx=(4, 12))
         ip_entry.bind("<Return>", lambda _e: self.refresh_all())
+
+        # Выпадающий список лимита записей для журнала событий
+        ttk.Label(toolbar, text="Лимит логов:").pack(side=tk.LEFT)
+        limit_combo = ttk.Combobox(
+            toolbar,
+            textvariable=self.limit_var,
+            values=("100", "500", "1000", "Все"),
+            width=6,
+            state="readonly",
+        )
+        limit_combo.pack(side=tk.LEFT, padx=(4, 12))
+        limit_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_all())
 
         ttk.Button(toolbar, text="Найти", command=self.refresh_all).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Сбросить", command=self._reset_search).pack(side=tk.LEFT, padx=2)
@@ -396,9 +409,17 @@ class App(tk.Tk):
         name = self.name_var.get()
         room = self.room_var.get()
         ip_adr = self.ip_adr.get()
+        
+        raw_limit = self.limit_var.get()
+        limit_val = int(raw_limit) if raw_limit.isdigit() else None
+
         try:
-            workstations = db.fetch_workstations(full_name=name, room_number=room, ip_address=ip_adr)
-            history = db.fetch_history(full_name=name, room_number=room, ip_address=ip_adr)
+            workstations = db.fetch_workstations(
+                full_name=name, room_number=room, ip_address=ip_adr
+            )
+            history = db.fetch_history(
+                full_name=name, room_number=room, ip_address=ip_adr, limit=limit_val
+            )
         except Exception as exc:
             messagebox.showerror(APP_TITLE, explain_db_error(exc), parent=self)
             return
