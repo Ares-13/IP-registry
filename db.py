@@ -341,3 +341,14 @@ def restore_from_history(history_id: int, updated_by: str) -> int:
                 ),
             )
             return cur.fetchone()["id"]
+
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, username, password_hash, role FROM users WHERE username=%s",
+                (username,)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
