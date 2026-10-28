@@ -711,6 +711,9 @@ class App(tk.Tk):
             
             self.ws_tree.unbind("<Double-1>")
 
+        if self.current_user["role"] == "viewer":
+            self.notebook.hide(self.archive_tab)
+
 
     def _start_edit(self) -> None:
         if self.current_user["role"] != "admin":
@@ -844,7 +847,7 @@ class LoginDialog(tk.Toplevel):
         y = int((screen_height / 2) - (window_height / 2))
         
         # Применяем размеры и координаты (формат: "ширинаxвысота+x+y")
-        self.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        self.geometry(f"{window_width+30}x{window_height+30}+{x}+{y}")
         self.resizable(False, False)
         self.grab_set()
         
