@@ -11,6 +11,8 @@ import psycopg2.extras
 
 from config import get_db_config
 
+import cache
+
 # libpq на русской Windows иначе падает с UnicodeDecodeError при ошибках подключения.
 os.environ["PGCLIENTENCODING"] = "UTF8"
 os.environ["LC_MESSAGES"] = "English"
@@ -231,7 +233,12 @@ def add_workstation(
                 """,
                 (ip_address, full_name, room_number, ticket_id or None, note or "", updated_by),
             )
-            return cur.fetchone()[0]
+            new_id = cur.fetchone()[0]
+            
+    # Отправляем событие в Redis Stream
+    cache.push_audit_event("INSERT", ip_address, updated_by, f"Добавлена станция: {full_name} в ауд. {room_number}")
+    
+    return new_id
 
 
 def update_workstation(
