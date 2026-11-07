@@ -16,6 +16,20 @@ import db
 import hashlib
 from config import get_default_operator, load_env
 
+import cache
+import os
+
+def resource_path(relative_path: str) -> str:
+    """Получает абсолютный путь к ресурсу (работает и для скрипта, и для PyInstaller)."""
+    try:
+        # PyInstaller создает временную папку и сохраняет путь в _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
+
 APP_TITLE = "IP-реестр"
 OPERATION_LABELS = {
     "INSERT": "Добавление",
@@ -49,7 +63,8 @@ class App(tk.Tk):
         self.minsize(1024, 580)
 
         try:
-            self.iconbitmap("logo.ico")
+            icon_path = resource_path("logo.ico")
+            self.iconbitmap(icon_path)
         except Exception as e:
             print(f"Ошибка загрузки иконки: {e}")
 
@@ -100,7 +115,8 @@ class App(tk.Tk):
         hint.pack(anchor=tk.W, pady=(0, 8))
 
         try:
-            img = Image.open("logo_pgups.png")
+            img_path = resource_path("logo_pgups.png")
+            img = Image.open(img_path)
             img.thumbnail((150, 80), Image.Resampling.LANCZOS)
             self.logo_image = ImageTk.PhotoImage(img)
 
@@ -877,13 +893,25 @@ class LoginDialog(tk.Toplevel):
             return
             
         try:
-            user_data = db.get_user_by_username(username)
+            # 1. Сначала ищем пользователя в быстрой памяти Redis
+            user_data = cache.get_cached_user(username)
+            
+            # 2. Если в Redis пусто (Cache Miss), идем в медленный PostgreSQL
+            if not user_data:
+                print("Идем в PostgreSQL за данными...")
+                user_data = db.get_user_by_username(username)
+                
+                # Если нашли в БД, сразу сохраняем копию в Redis, чтобы в следующий раз было быстрее
+                if user_data:
+                    cache.set_cached_user(username, user_data)
+            else:
+                print("Данные мгновенно получены из Redis!")
+                
         except Exception as e:
             messagebox.showerror("Ошибка БД", db.explain_db_error(e), parent=self)
             return
             
         if user_data:
-            # Хэшируем введенный пароль и сверяем с базой
             hashed_input = hashlib.sha256(password.encode()).hexdigest()
             if hashed_input == user_data["password_hash"]:
                 self.authenticated_user = user_data
@@ -921,7 +949,11 @@ def main() -> None:
 if __name__ == "__main__":
     import ctypes
     try:
+        # Улучшение четкости шрифтов на современных экранах
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        
+        myappid = 'pgups.ipregistry.app.1.0' # Уникальный ID твоего приложения
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except Exception:
         pass
     main()
