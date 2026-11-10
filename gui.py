@@ -780,7 +780,7 @@ class WorkstationDialog(tk.Toplevel):
         self.title("Новая рабочая станция")
         
         # Задаем базовые размеры окна
-        window_width = 380
+        window_width = 450
         window_height = 240
         
         # Получаем разрешение экрана

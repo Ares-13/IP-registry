@@ -67,6 +67,28 @@ def _row_to_history(row: dict) -> dict:
     }
 
 
+def generate_change_details(old_data: dict, new_data: dict) -> str:
+    changes = []
+    if old_data.get('ip_address') != new_data.get('ip_address'):
+        changes.append(f"IP: {old_data.get('ip_address')} ➔ {new_data.get('ip_address')}")
+    if old_data.get('full_name') != new_data.get('full_name'):
+        changes.append(f"ФИО: {old_data.get('full_name')} ➔ {new_data.get('full_name')}")
+    if old_data.get('room_number') != new_data.get('room_number'):
+        changes.append(f"Ауд: {old_data.get('room_number')} ➔ {new_data.get('room_number')}")
+    
+    old_ticket = old_data.get('ticket_id') or '—'
+    new_ticket = new_data.get('ticket_id') or '—'
+    if old_ticket != new_ticket:
+        changes.append(f"Заявка: {old_ticket} ➔ {new_ticket}")
+        
+    old_note = old_data.get('note') or '—'
+    new_note = new_data.get('note') or '—'
+    if old_note != new_note:
+        changes.append(f"Прим: {old_note} ➔ {new_note}")
+    
+    return "; ".join(changes) if changes else ""
+
+
 def fetch_workstations(
     search: str = "",
     full_name: str = "",
@@ -236,7 +258,17 @@ def add_workstation(
             new_id = cur.fetchone()[0]
             
     # Отправляем событие в Redis Stream
-    cache.push_audit_event("INSERT", ip_address, updated_by, f"Добавлена станция: {full_name} в ауд. {room_number}")
+    cache.push_audit_event(
+        "INSERT", 
+        ip_address, 
+        updated_by, 
+        f"Добавлена станция: {full_name} в ауд. {room_number}",
+        ws_id=new_id,
+        full_name=full_name,
+        room_number=room_number,
+        ticket_id=ticket_id,
+        note=note
+    )
     
     return new_id
 
@@ -293,6 +325,32 @@ def update_workstation(
                 ),
             )
 
+            # Формируем новую запись для сравнения
+            new_record = {
+                "ip_address": ip_address,
+                "full_name": full_name,
+                "room_number": room_number,
+                "ticket_id": ticket_id or "",
+                "note": note or "",
+            }
+            
+            # Генерируем красивую строку изменений
+            change_text = generate_change_details(old, new_record)
+            
+            # Отправляем событие в Redis, только если реально что-то поменялось
+            if change_text:
+                cache.push_audit_event(
+                    "UPDATE", 
+                    ip_address, 
+                    updated_by, 
+                    change_text,
+                    ws_id=ws_id,
+                    full_name=full_name,
+                    room_number=room_number,
+                    ticket_id=ticket_id,
+                    note=note
+                )
+
 
 def archive_workstation(ws_id: int, changed_by: str) -> None:
     with get_connection() as conn:
@@ -310,6 +368,25 @@ def archive_workstation(ws_id: int, changed_by: str) -> None:
                 "UPDATE workstations SET updated_by = %s WHERE id = %s",
                 (changed_by, ws_id),
             )
+            # Получаем все данные для лога перед удалением
+            cur.execute(
+                "SELECT ip_address, full_name, room_number, ticket_id, note FROM workstations WHERE id = %s", 
+                (ws_id,)
+            )
+            del_data = cur.fetchone()
+            
+            cache.push_audit_event(
+                "DELETE", 
+                del_data["ip_address"], 
+                changed_by, 
+                f"Удалена станция: {del_data['full_name']} из ауд. {del_data['room_number']}",
+                ws_id=ws_id,
+                full_name=del_data["full_name"],
+                room_number=del_data["room_number"],
+                ticket_id=del_data["ticket_id"],
+                note=del_data["note"]
+            )
+            
             cur.execute("DELETE FROM workstations WHERE id = %s", (ws_id,))
 
 

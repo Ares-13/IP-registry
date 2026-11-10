@@ -2,6 +2,8 @@
 config.ini
 .env
 find_hash.py
+listen_stream.py
+test_redis.py
 
 # Исключаем папку с генерируемыми отчетами
 ip_registry/
