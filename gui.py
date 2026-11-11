@@ -54,6 +54,55 @@ def explain_db_error(exc: BaseException) -> str:
     return str(exc)
 
 
+def parse_report_file(filepath: str) -> dict:
+    parsed_data = {}
+    with open(filepath, "r", encoding="utf-8") as f:
+        for _ in range(4):
+            next(f)
+        
+        for line in f:
+            parts = line.strip().split("\t")
+
+            # если строка пустая или сломанная, пропускаем её
+            if len(parts) < 5:
+                continue
+
+            ip_address = parts[1]
+            parsed_data[ip_address] = {
+                "full_name": parts[2],
+                "room_number": parts[3],
+                "ticket_id": parts[4],
+                # Если примечание есть - берем 8 индекс, иначе ставим пустую строку
+                "note": parts[8] if len(parts) > 8 else ""
+            }
+
+    return parsed_data
+
+
+def compare_reports(old_data: dict, new_data: dict) -> dict:
+    old_ips = set(old_data.keys())
+    new_ips = set(new_data.keys())
+
+    added_ips = new_ips - old_ips
+    removed_ips = old_ips - new_ips
+    common_ips = new_ips & old_ips
+
+    changed_ips = {}
+
+    for ip in common_ips:
+        if old_data[ip] != new_data[ip]:
+            changed_ips[ip] = {
+                "old": old_data[ip],
+                "new": new_data[ip]
+            }
+
+    return {
+        "added": {ip: new_data[ip] for ip in added_ips},
+        "removed": {ip: old_data[ip] for ip in removed_ips},
+        "changed": changed_ips
+    }
+
+
 class App(tk.Tk):
     def __init__(self, current_user: dict) -> None:
         super().__init__()
@@ -159,7 +208,10 @@ class App(tk.Tk):
         ttk.Button(toolbar, text="Сохранить .txt…", command=self.save_txt).pack(
             side=tk.LEFT, padx=(12, 2)
         )
-        
+        ttk.Button(toolbar, text="Сравнить отчеты", command=lambda: CompareDialog(self)).pack(
+            side=tk.LEFT, padx=2
+        )
+
         self.btn_add_ws = ttk.Button(toolbar, text="Добавить станцию", command=self.add_workstation)
         self.btn_add_ws.pack(side=tk.LEFT, padx=2)
         
@@ -945,6 +997,139 @@ def main() -> None:
     root.destroy()
     app = App(login_window.authenticated_user)
     app.mainloop()
+
+
+class CompareDialog(tk.Toplevel):
+    def __init__(self, master) -> None:
+        super().__init__(master)
+        self.title("Сравнение отчетов (Diff)")
+        
+        window_width = 550
+        window_height = 160
+        
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        x = int((screen_width / 2) - (window_width / 2))
+        y = int((screen_height / 2) - (window_height / 2))
+        
+        self.geometry(f"{window_width+30}x{window_height+30}+{x}+{y}")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+
+        self.file1_path = tk.StringVar()
+        self.file2_path = tk.StringVar()
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(body, text="Старый отчет:").grid(row=0, column=0, sticky=tk.W, pady=4)
+        ttk.Entry(body, textvariable=self.file1_path, width=45, state="readonly").grid(row=0, column=1, padx=4)
+        ttk.Button(body, text="Обзор...", command=self._load_file1).grid(row=0, column=2)
+
+        ttk.Label(body, text="Новый отчет:").grid(row=1, column=0, sticky=tk.W, pady=4)
+        ttk.Entry(body, textvariable=self.file2_path, width=45, state="readonly").grid(row=1, column=1, padx=4)
+        ttk.Button(body, text="Обзор...", command=self._load_file2).grid(row=1, column=2)
+
+        btns = ttk.Frame(body)
+        btns.grid(row=2, column=0, columnspan=3, pady=(15, 0), sticky=tk.E)
+        ttk.Button(btns, text="Отмена", command=self.destroy).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(btns, text="Сравнить", command=self._compare).pack(side=tk.RIGHT)
+
+    def _load_file1(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self, title="Выберите старый отчет", filetypes=[("Текстовые файлы", "*.txt")]
+        )
+        if path:
+            self.file1_path.set(path)
+
+    def _load_file2(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self, title="Выберите новый отчет", filetypes=[("Текстовые файлы", "*.txt")]
+        )
+        if path:
+            self.file2_path.set(path)
+
+    def _compare(self) -> None:
+        f1 = self.file1_path.get()
+        f2 = self.file2_path.get()
+        if not f1 or not f2:
+            messagebox.showwarning("Внимание", "Пожалуйста, выберите оба файла.", parent=self)
+            return
+        
+        try:
+            old_data = parse_report_file(f1)
+            new_data = parse_report_file(f2)
+            diff_result = compare_reports(old_data, new_data)
+            
+            self.destroy() # Закрываем маленькое окошко выбора файлов
+            DiffResultDialog(self.master, diff_result) # Открываем большое окно с результатами
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось обработать файлы:\n{e}", parent=self)
+
+
+class DiffResultDialog(tk.Toplevel):
+    def __init__(self, master, diff: dict) -> None:
+        super().__init__(master)
+        self.title("Результат анализа изменений")
+    
+        window_width = 300
+        window_height = 180
+        
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        x = int((screen_width / 2) - (window_width / 2))
+        y = int((screen_height / 2) - (window_height / 2))
+        
+        self.geometry(f"{window_width+30}x{window_height+30}+{x}+{y}")
+        self.transient(master)
+        
+        text_widget = tk.Text(self, wrap="word", font=("Consolas", 10), bg="#f8f9fa")
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        scrollbar = ttk.Scrollbar(text_widget, command=text_widget.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text_widget.config(yscrollcommand=scrollbar.set)
+        
+        lines = []
+        
+        added = diff.get("added", {})
+        if added:
+            lines.append(f"=== ДОБАВЛЕНО НОВЫХ ЗАПИСЕЙ: {len(added)} ===")
+            for ip, data in added.items():
+                lines.append(f"[+] {ip} - {data['full_name']} (Ауд: {data['room_number']})")
+            lines.append("\n")
+            
+        removed = diff.get("removed", {})
+        if removed:
+            lines.append(f"=== УДАЛЕНО ЗАПИСЕЙ: {len(removed)} ===")
+            for ip, data in removed.items():
+                lines.append(f"[-] {ip} - {data['full_name']} (Ауд: {data['room_number']})")
+            lines.append("\n")
+            
+        changed = diff.get("changed", {})
+        if changed:
+            lines.append(f"=== ИЗМЕНЕНО ЗАПИСЕЙ: {len(changed)} ===")
+            for ip, data in changed.items():
+                lines.append(f"[*] {ip} ({data['new']['full_name']}):")
+                old_d = data['old']
+                new_d = data['new']
+                if old_d['full_name'] != new_d['full_name']:
+                    lines.append(f"    ФИО: '{old_d['full_name']}'  ➔  '{new_d['full_name']}'")
+                if old_d['room_number'] != new_d['room_number']:
+                    lines.append(f"    Ауд: '{old_d['room_number']}'  ➔  '{new_d['room_number']}'")
+                if old_d['note'] != new_d['note']:
+                    lines.append(f"    Прим: '{old_d['note']}'  ➔  '{new_d['note']}'")
+            lines.append("\n")
+            
+        if not added and not removed and not changed:
+            lines.append("Отчеты абсолютно идентичны. Изменений конфигурации не найдено.")
+            
+        text_widget.insert(tk.END, "\n".join(lines))
+        text_widget.config(state="disabled") # Запрещаем пользователю стирать текст
+
 
 if __name__ == "__main__":
     import ctypes
