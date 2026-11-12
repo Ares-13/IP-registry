@@ -110,6 +110,12 @@ class App(tk.Tk):
         self.title(f"{APP_TITLE} — {self.current_user['username']} ({self.current_user['role']})")
         self.geometry("1360x740")
         self.minsize(1024, 580)
+        
+        # Разворачиваем окно на весь экран монитора
+        try:
+            self.state('zoomed')  # Работает в Windows
+        except tk.TclError:
+            self.attributes('-zoomed', True)  # Fallback для Linux
 
         try:
             icon_path = resource_path("logo.ico")
@@ -1004,7 +1010,7 @@ class CompareDialog(tk.Toplevel):
         super().__init__(master)
         self.title("Сравнение отчетов (Diff)")
         
-        window_width = 550
+        window_width = 610
         window_height = 160
         
         screen_width = self.winfo_screenwidth()
@@ -1074,8 +1080,8 @@ class DiffResultDialog(tk.Toplevel):
         super().__init__(master)
         self.title("Результат анализа изменений")
     
-        window_width = 300
-        window_height = 180
+        window_width = 360
+        window_height = 200
         
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
